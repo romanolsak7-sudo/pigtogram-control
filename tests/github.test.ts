@@ -155,6 +155,150 @@ describe("isolated GitHub reader", () => {
 });
 
 describe("freshness and partial data", () => {
+  it.each([429, 403])(
+    "preserves a later-page %s cooldown while the other resources hit cache",
+    async (status) => {
+      const start = Date.now();
+      let time = start;
+      let phase: "warm" | "limited" | "recovered" = "warm";
+      const transport = vi.fn(async (request: Request) => {
+        const url = new URL(request.url);
+        if (phase === "warm" && url.pathname.endsWith("/actions/runs"))
+          time = start + 2000;
+        if (phase === "limited" && url.pathname.endsWith("/pulls")) {
+          if (url.searchParams.get("page") === "2")
+            return new Response(null, {
+              status,
+              headers: { "Retry-After": "300" },
+            });
+          const response = await fixtureTransport(request);
+          response.headers.set(
+            "link",
+            `<${repositoryPath}/pulls?state=open&per_page=100&page=2>; rel="next"`,
+          );
+          return response;
+        }
+        return fixtureTransport(request);
+      });
+      const service = createAuthorizedGithubService({
+        authorize,
+        transport,
+        now: () => time,
+      });
+      const warm = await service();
+      phase = "limited";
+      time = start + 61000;
+      transport.mockClear();
+      const limited = await service();
+      expect(transport).toHaveBeenCalledTimes(3);
+      expect(limited.workflows.state).toBe("fresh");
+      expect(limited.commits.state).toBe("fresh");
+      expect(limited.pulls).toMatchObject({
+        state: "stale",
+        error: "RATE_LIMIT",
+        retryAt: new Date(start + 361000).toISOString(),
+        checkedAt: warm.pulls.checkedAt,
+        data: warm.pulls.data,
+      });
+      transport.mockClear();
+      time = start + 123000;
+      const blocked = await service();
+      expect(transport).not.toHaveBeenCalled();
+      expect(blocked.pulls.error).toBe("RATE_LIMIT");
+      phase = "recovered";
+      time = start + 361000;
+      expect((await service()).pulls.state).toBe("fresh");
+      expect(transport).toHaveBeenCalledTimes(4);
+    },
+  );
+
+  it("reports a later-page rate limit without a prior snapshot", async () => {
+    const time = Date.now();
+    const transport = vi.fn(async (request: Request) => {
+      const url = new URL(request.url);
+      if (url.pathname.endsWith("/pulls")) {
+        if (url.searchParams.get("page") === "2")
+          return new Response(null, {
+            status: 429,
+            headers: { "Retry-After": "300" },
+          });
+        const response = await fixtureTransport(request);
+        response.headers.set(
+          "link",
+          `<${repositoryPath}/pulls?state=open&per_page=100&page=2>; rel="next"`,
+        );
+        return response;
+      }
+      return fixtureTransport(request);
+    });
+    const result = await createAuthorizedGithubService({
+      authorize,
+      transport,
+      now: () => time,
+    })();
+    expect(result.pulls).toMatchObject({
+      state: "unavailable",
+      error: "RATE_LIMIT",
+      retryAt: new Date(time + 300000).toISOString(),
+      data: null,
+      complete: false,
+    });
+    expect(transport).toHaveBeenCalledTimes(3);
+  });
+
+  it.each(["fresh", "stale"])(
+    "does not reuse %s commits after the default branch changes",
+    async (cachedState) => {
+      const start = Date.now();
+      let time = start;
+      let branch = "main";
+      let fail = false;
+      const transport = vi.fn(async (request: Request) => {
+        const url = new URL(request.url);
+        if (url.pathname.endsWith("/commits") && fail)
+          return new Response(null, { status: 503 });
+        const body = await (await fixtureTransport(request)).json();
+        if (request.url === repositoryPath) body.default_branch = branch;
+        if (url.pathname.endsWith("/commits")) {
+          body[0].sha = (
+            url.searchParams.get("sha") === "main" ? "a" : "b"
+          ).repeat(40);
+          time += 1000;
+        }
+        return Response.json(body);
+      });
+      const service = createAuthorizedGithubService({
+        authorize,
+        transport,
+        now: () => time,
+      });
+      await service();
+      branch = "release/v2";
+      time = start + (cachedState === "fresh" ? 60000 : 62000);
+      fail = cachedState === "stale";
+      transport.mockClear();
+      const result = await service();
+      expect(result.repository.data?.defaultBranch).toBe("release/v2");
+      const commitRequest = transport.mock.calls.find(([request]) =>
+        new URL(request.url).pathname.endsWith("/commits"),
+      )?.[0];
+      expect(commitRequest).toBeDefined();
+      expect(new URL(commitRequest!.url).searchParams.get("sha")).toBe(
+        "release/v2",
+      );
+      if (fail) {
+        expect(result.commits).toMatchObject({
+          state: "unavailable",
+          error: "UPSTREAM",
+          data: null,
+        });
+      } else {
+        expect(result.commits.state).toBe("fresh");
+        expect(result.commits.data?.[0].sha).toBe("b".repeat(40));
+      }
+    },
+  );
+
   it("keeps independent resources and does not replace unknown with zero", async () => {
     const transport: Transport = (request) =>
       request.url.includes("actions/runs")

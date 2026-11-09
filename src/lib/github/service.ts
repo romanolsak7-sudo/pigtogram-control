@@ -181,6 +181,8 @@ export function createAuthorizedGithubService(deps: {
                 "FORBIDDEN",
                 "NOT_FOUND",
                 "INVALID_RESPONSE",
+                // Preserve the shared cooldown even when later resources hit cache.
+                "RATE_LIMIT",
               ].includes(error.code))
           )
             throw error;
@@ -229,10 +231,13 @@ export function createAuthorizedGithubService(deps: {
         })),
       };
     });
-    const commits = await resource("commits", async () => {
-      if (!repository.data) throw new GitHubError("UNAVAILABLE");
+    const defaultBranch = repository.data?.defaultBranch;
+    // Fresh and stale commits must belong to the branch selected by this snapshot.
+    const commitsKey = `commits:${defaultBranch ?? ""}`;
+    const commits = await resource(commitsKey, async () => {
+      if (!defaultBranch) throw new GitHubError("UNAVAILABLE");
       const response = await read(
-        `${repositoryPath}/commits?sha=${encodeURIComponent(repository.data.defaultBranch)}&per_page=5`,
+        `${repositoryPath}/commits?sha=${encodeURIComponent(defaultBranch)}&per_page=5`,
       );
       const raw = z.array(commitSchema).max(5).parse(response.body);
       return {

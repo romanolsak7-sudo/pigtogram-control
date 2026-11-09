@@ -27,7 +27,7 @@ Pilotní rozsah je napevno `romanolsak7-sudo/nasobilkozrouti`. Jde o návrh budo
 
 Šifrovaná Auth.js cookie je doplněna serverovým registrem aktivních náhodných ID relací. Odhlášení ID okamžitě zneplatní; opětovné použití staré cookie selže. Absolutní platnost je jedna hodina, nejvýše 100 aktivních relací. Restart procesu všechny relace zneplatní.
 
-**Registr a cache jsou v paměti jednoho Node procesu.** Tento základ je určen k lokálnímu fixture pilotu. Před více instancemi, serverless provozem nebo reálnými soukromými daty musí vzniknout sdílené úložiště relací s atomickou revokací, TTL a testy mezi instancemi. Sticky sessions tento požadavek nenahrazují. Paměťová cache používá klíč vlastník + relace + zdroj, má pevné limity a sama o sobě nedává oprávnění.
+**Registr a cache jsou v paměti jednoho Node procesu.** Tento základ je určen k lokálnímu fixture pilotu. Před více instancemi, serverless provozem nebo reálnými soukromými daty musí vzniknout sdílené úložiště relací s atomickou revokací, TTL a testy mezi instancemi. Sticky sessions tento požadavek nenahrazují. Paměťová cache používá klíč vlastník + relace + zdroj, u commitů navíc konkrétní výchozí větev, má pevné limity a sama o sobě nedává oprávnění. Změna výchozí větve nesmí vrátit čerstvé ani starší commity jiné větve; při výpadku nově vybrané větve jsou commity nedostupné.
 
 Soukromý snímek neposíláme v HTML/RSC ani Next Router Cache. Až klientská komponenta zavolá chráněné API a runtime validuje DTO i konec platnosti relace. Private HTML/API/auth mají `private, no-store`; upstream požadavky `no-store`. Neexistuje persistentní klientské uložení soukromých dat ani service worker.
 
@@ -55,6 +55,7 @@ Běh Actions zachovává ID workflow/běhu, pokus, event, větev, přesný `head
 - Čerstvá serverová cache: 60 s. Při timeoutu/5xx může autorizovaný uživatel vidět explicitně označená starší data maximálně 10 minut od úspěšného čtení, nejdéle do expirace relace. Čas ověření se neposouvá. Po restartu není fallback.
 - GitHub 401 zahodí cache a odmítne celý snímek; 403/404 odstraní dotčený zdroj. Žádný tichý fallback do DEMO. Neprozrazujeme, zda 404 znamená neexistující či nepřístupný repozitář.
 - 429 nebo 403 s rate-limit hlavičkami respektuje `Retry-After`/reset a zastaví další požadavky. Lokálně nejvýše 10 obnov za minutu na relaci. Automatické opakování 5xx není v tomto řezu zapnuté; další pokus provede další oprávněná obnova po cooldownu.
+- Rate limit na druhé či třetí stránce PR se předá společnému zpracování a zachová čekací lhůtu i přes následné cache hity. Částečně načtené PR se v tomto případě neoznačí za čerstvý úspěch: vrátí se předchozí snímek jako `stale`, nebo `unavailable`, vždy s `error=RATE_LIMIT` a `retryAt`.
 - Výpadek jednoho zdroje nezneplatní ostatní. Neúplná stránkovaná odpověď je označena `complete=false`; počty nejsou vydávány za úplné. Odpověď klientského API při neověřitelném přístupu nezobrazuje dříve přijatý snapshot.
 - API vrací generické 401/403/503, při lokálním limitu 429. Zápisové metody nejsou implementované (405). Přihlášení bez konfigurace je nedostupné; DEMO dále funguje.
 
@@ -68,9 +69,15 @@ npx playwright install --with-deps chromium webkit
 npm run test:e2e
 ```
 
-`check` spustí TypeScript, Vitest, produkční build a původní HTTP smoke test. Vitest blokuje neočekávaný globální fetch. Ověřuje autorizaci při cache hitu a dokončení, revokaci, izolaci DEMO, chybové stavy, limity, stránkování, redakci, přesné SHA a klientské závody při skrytí/odhlášení.
+`check` spustí TypeScript, Vitest, testy kontroly klientských souborů, produkční build s kontrolou syntetických tajných hodnot a původní HTTP smoke test. Vitest blokuje neočekávaný globální fetch. Ověřuje autorizaci při cache hitu a dokončení, revokaci, izolaci DEMO, chybové stavy, limity, stránkování, redakci, přesné SHA a klientské závody při skrytí/odhlášení.
 
-HTTP integrační test prochází skutečným Auth.js přihlášením, šifrovanou cookie, přístupem k API, odhlášením a replayem původní cookie. Pouze OAuth provider odpovědi jsou simulované preloadem testovacího procesu; produkční aplikace nemá testovací bypass. Testy odmítnou cizí ID, změněný state a cizí Origin/Host. Browser scénáře pokrývají Chromium a mobilní WebKit, historii, klientskou navigaci, skrytí DOM, logout mezi záložkami a šířku mobilního rozložení. WebKit emulace není fyzický iPhone.
+Regresní testy navíc pokrývají 429 i 403 s `Retry-After` na další stránce PR při čerstvé cache ostatních zdrojů, zákaz dalších požadavků do konce čekací lhůty a následné zotavení. Samostatný scénář ověřuje chování bez předchozího snímku. Testy změny výchozí větve ověřují nové načtení při stále čerstvé cache commitů i zákaz fallbacku na starší commity jiné větve při výpadku.
+
+`npm run build:checked` sestaví aplikaci s novými náhodnými syntetickými hodnotami pro `AUTH_SECRET`, `AUTH_GITHUB_SECRET` a `PIGTOGRAM_GITHUB_TOKEN`. Potom projde všechny soubory `.next/static`, včetně případných source map, a hledá tyto hodnoty v přímém, JSON-escaped, URL-encoded a Base64 tvaru. Nález, chybějící sestavení nebo absence JavaScriptu ukončí kontrolu chybou. Výpis obsahuje pouze cestu a název proměnné, nikdy její hodnotu. Skutečné přístupové údaje nejsou potřeba; kontrola nepřipojuje repozitář ani OAuth účet. Tento krok je součástí `npm run check`, tedy i stávajícího CI. Běžné `npm run build` samostatně tuto kontrolu nespouští.
+
+`npm run test:client-secrets` ověřuje čisté soubory, úmyslné vložení každé ze tří syntetických hodnot, Base64 únik v source mapě a odmítnutí chybějících vstupů. Jde o regresní kontrolu známých hodnot v klientských statických souborech, nikoli obecný důkaz nepřítomnosti všech tajemství či kontrolu HTML/RSC. Tyto odpovědi dál pokrývají HTTP a browser testy.
+
+HTTP integrační test prochází skutečným Auth.js přihlášením, šifrovanou cookie, přístupem k API, odhlášením a replayem původní cookie. Pouze OAuth provider odpovědi jsou simulované preloadem testovacího procesu; produkční aplikace nemá testovací bypass. Testy odmítnou cizí ID, změněný state a cizí Origin/Host. Mock token endpoint kontroluje přítomnost `code_verifier`, ale neověřuje jeho kryptografickou vazbu na původní challenge; skutečné OAuth ověření zůstává podmínkou další fáze. Browser scénáře pokrývají Chromium a mobilní WebKit, historii, klientskou navigaci, skrytí DOM, logout mezi záložkami a šířku mobilního rozložení. WebKit emulace není fyzický iPhone.
 
 CI používá syntetické hodnoty a nemá produkční secrets ani deployment job. Browser trace/screenshoty obsahují pouze simulovaná data. Přesný výsledek běhu je v novém PR; příprava testu sama o sobě není důkaz jeho úspěchu.
 

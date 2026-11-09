@@ -6,14 +6,16 @@
   "scripts": {
     "dev": "node scripts/dev.mjs",
     "build": "next build",
+    "build:checked": "node scripts/check-client-build.mjs",
     "start": "next start --hostname 0.0.0.0",
     "typecheck": "next typegen && tsc --noEmit",
     "test": "vitest run",
     "test:watch": "vitest",
+    "test:client-secrets": "node --test tests/client-secrets.test.mjs",
     "test:smoke": "node scripts/smoke.mjs",
     "format": "prettier --write .",
     "format:check": "prettier --check .",
-    "check": "npm run typecheck && npm test && npm run build && npm run test:smoke",
+    "check": "npm run typecheck && npm test && npm run test:client-secrets && npm run build:checked && npm run test:smoke",
     "test:e2e": "playwright test",
     "test:auth-http": "playwright test --project=chromium tests/e2e/auth-http.spec.ts"
   },

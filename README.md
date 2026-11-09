@@ -48,7 +48,7 @@ npm run test:smoke
 npm start
 ```
 
-`npm run check` provede TypeScript, testy, build a HTTP smoke test za sebou. Smoke test dočasně spustí produkční server na volném loopback portu, ověří všech šest stránek, demo API, zamítnutí POST a neznámou adresu a server ukončí. `npm start` zpřístupní lokální produkční build na http://localhost:3000; předem zastav vývojový server na stejném portu. Build ani start nic nenasazují.
+`npm run check` provede TypeScript, testy, kontrolovaný build a HTTP smoke test za sebou. `npm run build:checked` sestaví aplikaci se syntetickými tajnými hodnotami a odmítne jejich výskyt v klientských souborech `.next/static`; běží také v CI. `npm run test:client-secrets` ověřuje samotnou kontrolu na čistých souborech i úmyslných únicích. Běžné `npm run build` tuto dodatečnou kontrolu nespouští. Smoke test dočasně spustí produkční server na volném loopback portu, ověří všech šest stránek, demo API, zamítnutí POST a neznámou adresu a server ukončí. `npm start` zpřístupní lokální produkční build na http://localhost:3000; předem zastav vývojový server na stejném portu. Build ani start nic nenasazují.
 
 Testy ověřují nulový síťový provoz demo adaptéru, izolaci dat mezi požadavky, odmítnutí reálného režimu, pravidla diagnostiky, správu úkolů a odpovědi API. Fiktivní výsledky CI v rozhraní nejsou výsledky testů této aplikace.
 
