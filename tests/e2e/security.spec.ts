@@ -22,17 +22,29 @@ async function login(page: Page, variant = "owner", tamper = false) {
         "state",
         tamper ? "tampered" : url.searchParams.get("state")!,
       );
+      // WebKit cannot fulfill intercepted requests with a 302. A mock
+      // provider page navigates back; the application callback remains real.
       await route.fulfill({
-        status: 302,
-        headers: { location: callback.href },
-        body: "",
+        status: 200,
+        contentType: "text/html",
+        body: `<script>location.replace(${JSON.stringify(callback.href)})</script>`,
       });
       reached();
     },
   );
   await page.goto("/login");
+  const callbackResponse = page.waitForResponse(
+    (response) =>
+      new URL(response.url()).pathname === "/api/auth/callback/github",
+  );
   await page.getByRole("button", { name: "Přihlásit přes GitHub" }).click();
   await authorization;
+  await callbackResponse;
+  await page.waitForURL(
+    (url) =>
+      url.origin === "http://localhost:3107" &&
+      ["/login", "/control/github"].includes(url.pathname),
+  );
 }
 
 test("anonymous API, SSR, RSC and write requests reveal nothing", async ({
